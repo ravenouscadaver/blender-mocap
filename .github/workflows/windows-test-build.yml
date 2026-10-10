@@ -1,0 +1,24 @@
+name: Windows Test Build
+
+on:
+  push:
+    branches: [windows-port]
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build installable Blender addon zip
+        run: |
+          mkdir -p dist
+          zip -r dist/blender_mocap_windows_test.zip blender_mocap/             -x "blender_mocap/__pycache__/*"             -x "blender_mocap/capture_server/__pycache__/*"
+
+      - name: Upload test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender_mocap_windows_test
+          path: dist/blender_mocap_windows_test.zip
+          if-no-files-found: error
