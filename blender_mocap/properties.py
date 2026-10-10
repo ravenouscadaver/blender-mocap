@@ -1,5 +1,7 @@
 # blender_mocap/properties.py
 """Blender addon property definitions for the Motion Capture panel."""
+import sys
+
 import bpy
 from bpy.props import (
     EnumProperty,
@@ -53,7 +55,19 @@ def _get_camera_name(index: int) -> str:
 
 
 def get_camera_devices(self, context):
-    """Enumerate available video capture devices (filters out metadata nodes)."""
+    """Enumerate camera choices without importing capture-server dependencies.
+
+    Linux uses V4L2 discovery. Windows/macOS expose generic OpenCV indices here;
+    the capture subprocess performs the authoritative open test.
+    """
+    import os
+
+    if os.name == "nt":
+        return [(str(i), f"Camera {i}", f"Use camera index {i}") for i in range(6)]
+
+    if sys.platform == "darwin":
+        return [(str(i), f"Camera {i}", f"Use camera index {i}") for i in range(6)]
+
     import glob
     items = []
     devices = sorted(glob.glob("/dev/video*"))
