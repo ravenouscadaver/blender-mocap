@@ -32,7 +32,20 @@ def _venv_executable(venv_path: str, name: str) -> str:
 def _candidate_python_commands() -> list[list[str]]:
     candidates: list[list[str]] = []
 
-    # On Windows, py.exe is the most reliable way to find an installed CPython.
+    # Prefer Blender's bundled Python when Blender exposes its Python prefix.
+    # This keeps first-run setup self-contained on machines with no system
+    # Python installation.
+    bundled_names = ["python.exe"] if os.name == "nt" else ["python3", "python"]
+    for name in bundled_names:
+        bundled = os.path.join(sys.prefix, "bin", name)
+        if os.path.isfile(bundled):
+            candidates.append([bundled])
+
+    # Blender may itself be launched through a normal Python executable.
+    if sys.executable and os.path.basename(sys.executable).lower().startswith("python"):
+        candidates.append([sys.executable])
+
+    # Fall back to system CPython.
     if os.name == "nt":
         for version in ("3.12", "3.11", "3.10"):
             candidates.append(["py", f"-{version}"])
@@ -40,11 +53,15 @@ def _candidate_python_commands() -> list[list[str]]:
     else:
         candidates.extend([["python3"], ["python"]])
 
-    # Blender may be running from a normal Python executable in development.
-    if sys.executable and os.path.basename(sys.executable).lower().startswith("python"):
-        candidates.insert(0, [sys.executable])
-
-    return candidates
+    # Preserve order while removing duplicate commands.
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for command in candidates:
+        key = tuple(command)
+        if key not in seen:
+            seen.add(key)
+            unique.append(command)
+    return unique
 
 
 def find_compatible_python() -> list[str] | None:
