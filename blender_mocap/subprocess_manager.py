@@ -8,7 +8,7 @@ import sys
 
 
 ADDON_VERSION = "0.41.0-win-alpha"
-BASE_DIR = os.path.expanduser("~/.blender-mocap")
+BASE_DIR = os.environ.get("BLENDER_MOCAP_HOME", r"E:\\blender-mocap" if os.name == "nt" else os.path.expanduser("~/.blender-mocap"))
 VENV_DIR = os.path.join(BASE_DIR, "venv")
 RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
 IPC_HOST = "127.0.0.1"
