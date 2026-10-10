@@ -1,21 +1,21 @@
 # blender_mocap/capture_server/ipc_server.py
-"""Unix socket server for the capture process. Sends pose data, receives commands."""
+"""Loopback TCP server for the capture process."""
 import json
-import os
-import socket
-import select
-import threading
 import queue
+import select
+import socket
+import threading
 
 
 PROTOCOL_VERSION = 1
 
 
 class IPCServer:
-    """Newline-delimited JSON server over a Unix socket."""
+    """Newline-delimited JSON server over loopback TCP."""
 
-    def __init__(self, socket_path: str):
-        self._socket_path = socket_path
+    def __init__(self, host: str, port: int):
+        self._host = host
+        self._port = port
         self._server_sock: socket.socket | None = None
         self._client_sock: socket.socket | None = None
         self._running = False
@@ -24,28 +24,30 @@ class IPCServer:
         self._recv_buffer = ""
 
     def start(self) -> None:
-        # Remove stale socket
-        if os.path.exists(self._socket_path):
-            os.unlink(self._socket_path)
-
-        self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server_sock.bind(self._socket_path)
+        self._server_sock.bind((self._host, self._port))
         self._server_sock.listen(1)
         self._running = True
         self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
         self._accept_thread.start()
 
     def _accept_loop(self) -> None:
+        if self._server_sock is None:
+            return
         self._server_sock.settimeout(1.0)
         while self._running:
             try:
                 client, _ = self._server_sock.accept()
                 self._client_sock = client
                 self._client_sock.setblocking(False)
-                # Send handshake
                 self._raw_send({"type": "hello", "protocol_version": PROTOCOL_VERSION})
                 self._read_commands_loop()
+                try:
+                    client.close()
+                except OSError:
+                    pass
+                self._client_sock = None
             except socket.timeout:
                 continue
             except OSError:
@@ -61,7 +63,7 @@ class IPCServer:
                 if ready:
                     data = sock.recv(4096)
                     if not data:
-                        break  # Client disconnected
+                        break
                     self._recv_buffer += data.decode("utf-8")
                     while "\n" in self._recv_buffer:
                         line, self._recv_buffer = self._recv_buffer.split("\n", 1)
@@ -104,7 +106,6 @@ class IPCServer:
                 self._server_sock.close()
             except OSError:
                 pass
-        if os.path.exists(self._socket_path):
-            os.unlink(self._socket_path)
+            self._server_sock = None
         if self._accept_thread:
             self._accept_thread.join(timeout=3.0)
