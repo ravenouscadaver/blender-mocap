@@ -1,24 +1,24 @@
 # blender_mocap/capture_server/__main__.py
-"""Capture server entry point. Run as: python -m blender_mocap.capture_server --socket <path> --camera <index>"""
+"""Capture server entry point."""
 import argparse
 import os
 import signal
-import sys
 import time
 
 import cv2
 
+from .audio import AudioRecorder
 from .camera import Camera
+from .ipc_server import IPCServer
 from .pose_estimator import PoseEstimator
 from .preview import PreviewWindow
-from .ipc_server import IPCServer
 from .smoothing import LandmarkSmoother
-from .audio import AudioRecorder
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Motion capture server")
-    parser.add_argument("--socket", required=True, help="Unix socket path")
+    parser.add_argument("--host", default="127.0.0.1", help="IPC bind address")
+    parser.add_argument("--port", type=int, required=True, help="IPC TCP port")
     parser.add_argument("--camera", type=int, default=0, help="Camera device index")
     parser.add_argument("--audio-device", type=int, default=None, help="Audio device index")
     parser.add_argument("--smoothing", type=float, default=0.3, help="Smoothing strength 0.0-1.0")
@@ -26,14 +26,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def smoothing_to_min_cutoff(strength: float) -> float:
-    """Map slider 0.0-1.0 to min_cutoff: 0.0 -> 1.0 (none), 1.0 -> 0.05 (heavy)."""
     return 1.0 - strength * 0.95
 
 
 def main() -> None:
     args = parse_args()
 
-    ipc = IPCServer(args.socket)
+    ipc = IPCServer(args.host, args.port)
     ipc.start()
 
     camera = Camera(args.camera)
@@ -59,12 +58,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    # Wait for client connection
     while running and not ipc.has_client():
         time.sleep(0.1)
 
     while running:
-        # Process commands
         cmd = ipc.read_command(timeout=0)
         if cmd:
             action = cmd.get("action", "")
@@ -91,7 +88,6 @@ def main() -> None:
             elif action == "start_recording":
                 if previewing and not recording:
                     recordings_dir = os.path.expanduser("~/.blender-mocap/recordings")
-                    # Find next recording number by scanning for highest existing
                     max_num = 0
                     if os.path.exists(recordings_dir):
                         for f in os.listdir(recordings_dir):
@@ -101,6 +97,7 @@ def main() -> None:
                                     max_num = max(max_num, num)
                                 except ValueError:
                                     pass
+                    os.makedirs(recordings_dir, exist_ok=True)
                     wav_path = os.path.join(recordings_dir, f"MoCap_{max_num + 1:03d}.wav")
                     audio.start(wav_path)
                     recording = True
@@ -114,7 +111,6 @@ def main() -> None:
                 running = False
                 continue
 
-        # Capture and process frame (throttled to ~30fps)
         if previewing:
             frame_start = time.time()
             ret, frame = camera.read()
@@ -131,18 +127,16 @@ def main() -> None:
                     pose_sent = True
                     if not preview.update(frame, smoothed):
                         running = False
-                else:
-                    if not preview.update(frame):
-                        running = False
+                elif not preview.update(frame):
+                    running = False
             else:
                 time.sleep(0.001)
 
-            # Throttle to ~30fps to prevent CPU overload
             elapsed = time.time() - frame_start
             target_frame_time = 1.0 / 30.0
             if elapsed < target_frame_time:
                 time.sleep(target_frame_time - elapsed)
-            # Send heartbeat when no pose data (camera failure or no landmarks)
+
             if not pose_sent:
                 now = time.time()
                 if now - last_heartbeat >= heartbeat_interval:
@@ -152,7 +146,6 @@ def main() -> None:
                     except (OSError, BrokenPipeError):
                         running = False
         else:
-            # Not previewing — send heartbeats
             now = time.time()
             if now - last_heartbeat >= heartbeat_interval:
                 try:
@@ -162,7 +155,6 @@ def main() -> None:
                     running = False
             time.sleep(0.1)
 
-    # Cleanup
     if recording:
         audio.stop()
     preview.close()

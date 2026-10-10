@@ -91,38 +91,21 @@ class MOCAP_OT_start_preview(Operator):
         camera_idx = int(props.camera_device)
         audio_dev = None if props.audio_device == "DEFAULT" else int(props.audio_device)
 
-        socket_path = _capture_process.start(
-            camera_index=camera_idx,
-            audio_device=audio_dev,
-            smoothing=props.smoothing,
-        )
-
-        # Wait for server to create socket and be ready to accept
-        # The socket file may exist briefly before the server crashes,
-        # so we also need to check the process is still alive
-        for _ in range(50):
-            if os.path.exists(socket_path):
-                break
-            if not _capture_process.is_running():
-                break
-            time.sleep(0.1)
-
-        if not _capture_process.is_running():
-            stderr = _capture_process.get_stderr()
-            error_detail = stderr.strip().splitlines()[-1] if stderr.strip() else "unknown error"
-            self.report({"ERROR"}, f"Capture server crashed: {error_detail}")
-            print(f"[MoCap] Capture server stderr:\n{stderr}")
-            _capture_process.stop()
+        try:
+            ipc_host, ipc_port = _capture_process.start(
+                camera_index=camera_idx,
+                audio_device=audio_dev,
+                smoothing=props.smoothing,
+            )
+        except Exception as exc:
+            self.report({"ERROR"}, f"Cannot start capture environment: {exc}")
+            print(f"[MoCap] Capture environment setup failed: {exc!r}")
             return {"CANCELLED"}
 
-        if not os.path.exists(socket_path):
-            self.report({"ERROR"}, "Capture server failed to start — socket not created")
-            _capture_process.stop()
-            return {"CANCELLED"}
-
-        # Connect with retry — server may still be initializing after socket bind
-        client = IPCClient(socket_path)
-        for attempt in range(10):
+        # Connect with retry. The child process may need a moment to import
+        # MediaPipe/OpenCV before it reaches the TCP bind.
+        client = IPCClient(ipc_host, ipc_port)
+        for attempt in range(50):
             try:
                 client.connect()
                 break
@@ -134,7 +117,7 @@ class MOCAP_OT_start_preview(Operator):
                     print(f"[MoCap] Capture server stderr:\n{stderr}")
                     _capture_process.stop()
                     return {"CANCELLED"}
-                time.sleep(0.2)
+                time.sleep(0.1)
         else:
             stderr = _capture_process.get_stderr()
             error_detail = stderr.strip().splitlines()[-1] if stderr.strip() else "connection refused"

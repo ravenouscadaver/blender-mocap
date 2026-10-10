@@ -14,31 +14,42 @@ class Camera:
 
     def open(self) -> None:
         import os
-        import stat
-        path = self._device_path
 
-        # Check device exists and is accessible before OpenCV attempt
-        if not os.path.exists(path):
-            raise RuntimeError(f"Camera device {path} does not exist")
-        try:
-            st = os.stat(path)
-            if not stat.S_ISCHR(st.st_mode):
-                raise RuntimeError(f"{path} is not a character device")
-            # Check read/write access
-            if not os.access(path, os.R_OK | os.W_OK):
-                import getpass
-                user = getpass.getuser()
-                raise RuntimeError(
-                    f"Permission denied on {path} — "
-                    f"add user '{user}' to the 'video' group: "
-                    f"sudo usermod -aG video {user}"
-                )
-        except OSError as e:
-            raise RuntimeError(f"Cannot access {path}: {e}")
+        if os.name == "nt":
+            # DirectShow avoids the long camera-probing stalls common with the
+            # default MSMF backend on some Windows systems.
+            self._cap = cv2.VideoCapture(self._device_index, cv2.CAP_DSHOW)
+            label = f"camera index {self._device_index}"
+        elif os.path.exists(self._device_path):
+            import stat
+            path = self._device_path
+            try:
+                st = os.stat(path)
+                if not stat.S_ISCHR(st.st_mode):
+                    raise RuntimeError(f"{path} is not a character device")
+                if not os.access(path, os.R_OK | os.W_OK):
+                    import getpass
+                    user = getpass.getuser()
+                    raise RuntimeError(
+                        f"Permission denied on {path} — "
+                        f"add user '{user}' to the 'video' group: "
+                        f"sudo usermod -aG video {user}"
+                    )
+            except OSError as e:
+                raise RuntimeError(f"Cannot access {path}: {e}")
+            self._cap = cv2.VideoCapture(path)
+            label = path
+        else:
+            # macOS and other OpenCV platforms use numeric device indices.
+            self._cap = cv2.VideoCapture(self._device_index)
+            label = f"camera index {self._device_index}"
 
-        self._cap = cv2.VideoCapture(path)
         if not self._cap.isOpened():
-            raise RuntimeError(f"Cannot open camera at {path} — device may be in use by another application")
+            self._cap.release()
+            self._cap = None
+            raise RuntimeError(
+                f"Cannot open {label} — the device may be unavailable or in use"
+            )
 
         # Cap resolution to 640x480 — MediaPipe doesn't benefit from higher,
         # and full-res (1080p/4K) causes thermal throttling from the extra
